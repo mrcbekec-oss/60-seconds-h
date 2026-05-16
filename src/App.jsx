@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 
-const ARENA_WIDTH = 1000;
-const ARENA_HEIGHT = 700;
+const ARENA_WIDTH = 1400;
+const ARENA_HEIGHT = 800;
 const PLAYER_SIZE = 40;
 const SPEED = 6;
 const MAX_CAPACITY = 5;
-const START_TIME = 60;
+const START_TIME = 10;
 const INTERACTION_DISTANCE = 60; 
-const SHELTER_POS = { x: 500, y: 350, radius: 80 };
+const SHELTER_POS = { x: 700, y: 400, radius: 100 };
 
 const ITEM_TYPES = [
   { id: 'child', name: 'Çocuk', size: 3, icon: '🧒' },
@@ -30,21 +30,21 @@ function App() {
   const [itemsOnMap, setItemsOnMap] = useState([]);
   const [capacityWarning, setCapacityWarning] = useState(false);
 
-  // Karakter state
+  // Karakter ve oyun verilerini anında (senkron) takip etmek için Ref'ler
   const [playerPos, setPlayerPos] = useState({ x: 100, y: 100 });
   const playerRef = useRef({ x: 100, y: 100 });
   const keysRef = useRef({ w: false, a: false, s: false, d: false, e: false });
-  const interactionRef = useRef({ canInteract: false, item: null });
+  const inventoryRef = useRef([]);
+  const itemsOnMapRef = useRef([]);
+  const shelterItemsRef = useRef([]);
   const requestRef = useRef();
 
   // Rastgele eşyalar oluşturma
   const generateItems = () => {
     const generated = [];
-    // Her item tipinden rastgele 1 ile 3 adet arası koyalım
     ITEM_TYPES.forEach(type => {
       const count = type.size >= 3 ? 1 : Math.floor(Math.random() * 3) + 1;
       for (let i = 0; i < count; i++) {
-        // Sığınağın içine düşmemesi için
         let rx, ry;
         do {
           rx = Math.random() * (ARENA_WIDTH - 100) + 50;
@@ -65,9 +65,17 @@ function App() {
   const startGame = () => {
     setGameState('playing');
     setTimeLeft(START_TIME);
+    
+    const initialItems = generateItems();
+    itemsOnMapRef.current = initialItems;
+    setItemsOnMap(initialItems);
+    
+    inventoryRef.current = [];
     setInventory([]);
+    
+    shelterItemsRef.current = [];
     setShelterItems([]);
-    setItemsOnMap(generateItems());
+    
     playerRef.current = { x: 100, y: 100 };
     setPlayerPos({ x: 100, y: 100 });
     setCapacityWarning(false);
@@ -93,15 +101,14 @@ function App() {
   // Oyun sonu kontrolü
   useEffect(() => {
     if (timeLeft === 0 && gameState === 'playing') {
-      // Süre bitti, karakter sığınakta mı?
       const distToShelter = Math.hypot(
         playerRef.current.x - SHELTER_POS.x, 
         playerRef.current.y - SHELTER_POS.y
       );
       if (distToShelter <= SHELTER_POS.radius + 20) {
-        setGameState('won'); // Sığınağa yetişti
+        setGameState('won'); 
       } else {
-        setGameState('lost'); // Dışarıda kaldı
+        setGameState('lost'); 
       }
     }
   }, [timeLeft, gameState]);
@@ -151,67 +158,53 @@ function App() {
     if (keys.a) x -= SPEED;
     if (keys.d) x += SPEED;
 
-    // Sınır kontrolleri
     x = Math.max(PLAYER_SIZE/2, Math.min(ARENA_WIDTH - PLAYER_SIZE/2, x));
     y = Math.max(PLAYER_SIZE/2, Math.min(ARENA_HEIGHT - PLAYER_SIZE/2, y));
 
     playerRef.current = { x, y };
-    setPlayerPos({ x, y }); // UI güncellenmesi için state'e aktarıyoruz (büyük oyunlarda useRef + doğrudan DOM manipulasyonu daha iyidir ama bu boyut için yeterli)
+    setPlayerPos({ x, y }); 
 
-    // React statelerine her frame erişmek riskli olduğundan, callback şeklinde setState kullanıyoruz.
-    setItemsOnMap(currentItems => {
-      let closestItem = null;
-      let minDistance = INTERACTION_DISTANCE;
+    // Çarpışma / Eşya Alma (Ref üzerinden anlık kontrol race condition'ı engeller)
+    let closestItem = null;
+    let minDistance = INTERACTION_DISTANCE;
 
-      // En yakın öğeyi bul
-      currentItems.forEach(item => {
-        const dist = Math.hypot(item.x - x, item.y - y);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestItem = item;
-        }
-      });
-
-      interactionRef.current.canInteract = closestItem !== null;
-      interactionRef.current.item = closestItem;
-
-      // Eşya Alma Mantığı
-      if (keys.e && closestItem) {
-        // Tuşu sıfırla ki ard arda almasın
-        keys.e = false;
-        
-        setInventory(currentInventory => {
-          const usedCap = currentInventory.reduce((tot, i) => tot + i.size, 0);
-          if (usedCap + closestItem.size <= MAX_CAPACITY) {
-            // Haritadan silip envantere ekliyoruz
-            const newItems = currentItems.filter(i => i.uid !== closestItem.uid);
-            // Uyarıyı temizle
-            setCapacityWarning(false);
-            // State'i güncelle ve silinmiş diziyi dön
-            setTimeout(() => setInventory([...currentInventory, closestItem]), 0);
-            return newItems; 
-          } else {
-            // Kapasite yetersiz
-            setCapacityWarning(true);
-            setTimeout(() => setCapacityWarning(false), 2000);
-            return currentItems;
-          }
-        });
+    itemsOnMapRef.current.forEach(item => {
+      const dist = Math.hypot(item.x - x, item.y - y);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestItem = item;
       }
-
-      return currentItems; // default olarak aynı eşyaları döndür
     });
+
+    if (keys.e && closestItem) {
+      keys.e = false; // Basılı tutmayı önle
+      
+      const usedCap = inventoryRef.current.reduce((tot, i) => tot + i.size, 0);
+      if (usedCap + closestItem.size <= MAX_CAPACITY) {
+        // Refleri anında güncelle
+        inventoryRef.current = [...inventoryRef.current, closestItem];
+        itemsOnMapRef.current = itemsOnMapRef.current.filter(i => i.uid !== closestItem.uid);
+        
+        // UI'ı güncelle
+        setInventory(inventoryRef.current);
+        setItemsOnMap(itemsOnMapRef.current);
+        setCapacityWarning(false);
+      } else {
+        setCapacityWarning(true);
+        setTimeout(() => setCapacityWarning(false), 2000);
+      }
+    }
 
     // Sığınağa Bırakma Mantığı
     const distToShelter = Math.hypot(x - SHELTER_POS.x, y - SHELTER_POS.y);
     if (distToShelter <= SHELTER_POS.radius) {
-      setInventory(currentInventory => {
-        if (currentInventory.length > 0) {
-          setShelterItems(prev => [...prev, ...currentInventory]);
-          return []; // Envanteri boşalt
-        }
-        return currentInventory;
-      });
+      if (inventoryRef.current.length > 0) {
+        shelterItemsRef.current = [...shelterItemsRef.current, ...inventoryRef.current];
+        inventoryRef.current = [];
+        
+        setShelterItems(shelterItemsRef.current);
+        setInventory(inventoryRef.current);
+      }
     }
 
     requestRef.current = requestAnimationFrame(updateGame);

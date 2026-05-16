@@ -111,8 +111,8 @@ body {
 
 /* 2D Oyun Alanı (Ev) */
 .arena {
-  width: 1000px;
-  height: 700px;
+  width: 1400px;
+  height: 800px;
   position: relative;
   background: #2a2a2a url('data:image/svg+xml;utf8,<svg width="40" height="40" xmlns="http://www.w3.org/2000/svg"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="1"/></svg>');
   border: 4px solid #444;
