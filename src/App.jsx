@@ -242,6 +242,22 @@ function App() {
     setGameState('survival');
   };
 
+  const nextDayRef = useRef(null);
+  
+  useEffect(() => {
+    nextDayRef.current = nextDay;
+  });
+
+  useEffect(() => {
+    if (gameState === 'survival' && !eventModal) {
+      // 5 Dakika (300,000 milisaniye) otomatik ilerleme
+      const timer = setInterval(() => {
+        if(nextDayRef.current) nextDayRef.current();
+      }, 300000); 
+      return () => clearInterval(timer);
+    }
+  }, [gameState, eventModal]);
+
   // ---- EVENT AKSİYONLARI ----
   const fireGun = () => {
     setSupplies(prev => ({ ...prev, ammo: prev.ammo - 1 }));
