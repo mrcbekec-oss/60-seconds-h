@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Peer } from 'peerjs';
 import './index.css';
 
 const ARENA_WIDTH = 1400;
@@ -26,27 +27,124 @@ const ITEM_TYPES = [
 function App() {
   const [gameState, setGameState] = useState('start'); 
   
-  // Phase 1 (Toplama) Stateleri
+  // Multiplayer Stateleri
+  const [isMultiplayer, setIsMultiplayer] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const [peerId, setPeerId] = useState('');
+  const [joinId, setJoinId] = useState('');
+  const [conn, setConn] = useState(null);
+  
+  const [localReady, setLocalReady] = useState(false);
+  const [remoteReady, setRemoteReady] = useState(false);
+
+  // Phase 1 Stateleri
   const [timeLeft, setTimeLeft] = useState(START_TIME);
   const [inventory, setInventory] = useState([]);
   const [itemsOnMap, setItemsOnMap] = useState([]);
   const [capacityWarning, setCapacityWarning] = useState(false);
+  
   const [playerPos, setPlayerPos] = useState({ x: 100, y: 100 });
+  const [remotePlayerPos, setRemotePlayerPos] = useState({ x: 100, y: 100 });
+
   const playerRef = useRef({ x: 100, y: 100 });
+  const remotePlayerRef = useRef({ x: 100, y: 100 });
   const keysRef = useRef({ w: false, a: false, s: false, d: false, e: false });
   const inventoryRef = useRef([]);
   const itemsOnMapRef = useRef([]);
   const shelterItemsRef = useRef([]);
   const requestRef = useRef();
 
-  // Phase 2 (Sığınak / Survival) Stateleri
+  // Phase 2 Stateleri
   const [day, setDay] = useState(1);
   const [survivors, setSurvivors] = useState([]);
   const [supplies, setSupplies] = useState({ soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0, gun: 0, ammo: 0 });
   const [logs, setLogs] = useState([]);
   const [eventModal, setEventModal] = useState(null);
 
-  // Rastgele eşyalar oluşturma
+  /* =========================================================
+     MULTIPLAYER BAĞLANTI (PEERJS)
+     ========================================================= */
+  const hostRoom = () => {
+    setIsMultiplayer(true);
+    setIsHost(true);
+    const peer = new Peer();
+    peer.on('open', (id) => setPeerId(id));
+    peer.on('connection', (connection) => {
+      setConn(connection);
+      // Bağlantı kurulduğunda host oyunu başlatır
+      connection.on('open', () => {
+        setTimeout(() => startGame(true, connection), 1000);
+      });
+      setupConnListeners(connection);
+    });
+  };
+
+  const joinRoom = () => {
+    if (!joinId) return;
+    setIsMultiplayer(true);
+    setIsHost(false);
+    const peer = new Peer();
+    peer.on('open', () => {
+      const connection = peer.connect(joinId);
+      setConn(connection);
+      setupConnListeners(connection);
+    });
+  };
+
+  const setupConnListeners = (connection) => {
+    connection.on('data', (data) => {
+      if (data.type === 'pos') {
+        remotePlayerRef.current = { x: data.x, y: data.y };
+        setRemotePlayerPos({ x: data.x, y: data.y });
+      } 
+      else if (data.type === 'start') {
+        itemsOnMapRef.current = data.items;
+        setItemsOnMap(data.items);
+        setGameState('playing');
+        setTimeLeft(START_TIME);
+      } 
+      else if (data.type === 'item_picked') {
+        itemsOnMapRef.current = itemsOnMapRef.current.filter(i => i.uid !== data.uid);
+        setItemsOnMap([...itemsOnMapRef.current]);
+      } 
+      else if (data.type === 'shelter_enter') {
+        shelterItemsRef.current = [...shelterItemsRef.current, ...data.inv];
+      }
+      else if (data.type === 'survival_sync') {
+        setSupplies(data.supplies);
+        setSurvivors(data.survivors);
+        setDay(data.day);
+        setLogs(data.logs);
+        setGameState('survival');
+      }
+      else if (data.type === 'state_sync') {
+        setSupplies(data.supplies);
+        setSurvivors(data.survivors);
+        setDay(data.day);
+        setLogs(data.logs);
+        setEventModal(data.eventModal);
+        setLocalReady(false);
+        setRemoteReady(false);
+      }
+      else if (data.type === 'action') {
+        if (data.action === 'feed') executeActionLocally('feed', data.id);
+        if (data.action === 'water') executeActionLocally('water', data.id);
+        if (data.action === 'heal') executeActionLocally('heal', data.id);
+        if (data.action === 'expedition') executeActionLocally('expedition', data.id);
+        if (data.action === 'eventChoice') executeEventChoiceLocally(data.choiceIdx);
+      }
+      else if (data.type === 'ready') {
+        setRemoteReady(true);
+      }
+      else if (data.type === 'gameover') {
+        setGameState('gameover');
+      }
+    });
+  };
+
+  /* =========================================================
+     PHASE 1 (TOPLAMA MANTIKLARI)
+     ========================================================= */
   const generateItems = () => {
     const generated = [];
     ITEM_TYPES.forEach(type => {
@@ -66,9 +164,7 @@ function App() {
     return generated;
   };
 
-  const startGame = () => {
-    setGameState('playing');
-    setTimeLeft(START_TIME);
+  const startGame = (isMplayer = false, c = conn) => {
     const initialItems = generateItems();
     itemsOnMapRef.current = initialItems;
     setItemsOnMap(initialItems);
@@ -78,11 +174,23 @@ function App() {
     playerRef.current = { x: 100, y: 100 };
     setPlayerPos({ x: 100, y: 100 });
     setCapacityWarning(false);
+    setGameState('playing');
+    setTimeLeft(START_TIME);
+
+    if (isMplayer && c) {
+      c.send({ type: 'start', items: initialItems });
+    }
+  };
+
+  // Tek Oyunculu Başlangıç
+  const startSinglePlayer = () => {
+    setIsMultiplayer(false);
+    startGame();
   };
 
   useEffect(() => {
     let timerId;
-    if (gameState === 'playing') {
+    if (gameState === 'playing' && (!isMultiplayer || isHost)) {
       timerId = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
@@ -94,42 +202,41 @@ function App() {
       }, 1000);
     }
     return () => clearInterval(timerId);
-  }, [gameState]);
+  }, [gameState, isMultiplayer, isHost]);
 
   useEffect(() => {
-    if (timeLeft === 0 && gameState === 'playing') {
-      const distToShelter = Math.hypot(
-        playerRef.current.x - SHELTER_POS.x, 
-        playerRef.current.y - SHELTER_POS.y
-      );
-      if (distToShelter <= SHELTER_POS.radius + 20) {
-        setupSurvival(); 
-      } else {
-        setGameState('gameover'); 
-      }
+    // Saniye bittiğinde host veya single player kontrolü ele alır
+    if (timeLeft === 0 && gameState === 'playing' && (!isMultiplayer || isHost)) {
+      setTimeout(() => checkPhase1End(), 500); // Gecikme ile ağ senkronizasyonunu bekle
     }
   }, [timeLeft, gameState]);
+
+  const checkPhase1End = () => {
+    const dist = Math.hypot(playerRef.current.x - SHELTER_POS.x, playerRef.current.y - SHELTER_POS.y);
+    const hostInShelter = dist <= SHELTER_POS.radius + 20;
+
+    let clientInShelter = false;
+    if (isMultiplayer) {
+      const cDist = Math.hypot(remotePlayerRef.current.x - SHELTER_POS.x, remotePlayerRef.current.y - SHELTER_POS.y);
+      clientInShelter = cDist <= SHELTER_POS.radius + 20;
+    }
+
+    if (hostInShelter || clientInShelter) {
+      setupSurvival();
+    } else {
+      setGameState('gameover');
+      if (conn) conn.send({ type: 'gameover' });
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e) => {
       const key = e.key.toLowerCase();
-      if (keysRef.current.hasOwnProperty(key) || key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
-        if (key === 'w' || key === 'arrowup') keysRef.current.w = true;
-        if (key === 'a' || key === 'arrowleft') keysRef.current.a = true;
-        if (key === 's' || key === 'arrowdown') keysRef.current.s = true;
-        if (key === 'd' || key === 'arrowright') keysRef.current.d = true;
-        if (key === 'e') keysRef.current.e = true;
-      }
+      if (keysRef.current.hasOwnProperty(key)) keysRef.current[key] = true;
     };
     const handleKeyUp = (e) => {
       const key = e.key.toLowerCase();
-      if (keysRef.current.hasOwnProperty(key) || key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
-        if (key === 'w' || key === 'arrowup') keysRef.current.w = false;
-        if (key === 'a' || key === 'arrowleft') keysRef.current.a = false;
-        if (key === 's' || key === 'arrowdown') keysRef.current.s = false;
-        if (key === 'd' || key === 'arrowright') keysRef.current.d = false;
-        if (key === 'e') keysRef.current.e = false;
-      }
+      if (keysRef.current.hasOwnProperty(key)) keysRef.current[key] = false;
     };
     if (gameState === 'playing') {
       window.addEventListener('keydown', handleKeyDown);
@@ -150,16 +257,21 @@ function App() {
     let { x, y } = playerRef.current;
     const keys = keysRef.current;
 
-    if (keys.w) y -= SPEED;
-    if (keys.s) y += SPEED;
-    if (keys.a) x -= SPEED;
-    if (keys.d) x += SPEED;
+    let moved = false;
+    if (keys.w) { y -= SPEED; moved = true; }
+    if (keys.s) { y += SPEED; moved = true; }
+    if (keys.a) { x -= SPEED; moved = true; }
+    if (keys.d) { x += SPEED; moved = true; }
 
     x = Math.max(PLAYER_SIZE/2, Math.min(ARENA_WIDTH - PLAYER_SIZE/2, x));
     y = Math.max(PLAYER_SIZE/2, Math.min(ARENA_HEIGHT - PLAYER_SIZE/2, y));
 
     playerRef.current = { x, y };
     setPlayerPos({ x, y }); 
+
+    if (moved && conn) {
+      conn.send({ type: 'pos', x, y });
+    }
 
     let closestItem = null;
     let minDistance = INTERACTION_DISTANCE;
@@ -181,6 +293,7 @@ function App() {
         setInventory([...inventoryRef.current]);
         setItemsOnMap([...itemsOnMapRef.current]);
         setCapacityWarning(false);
+        if (conn) conn.send({ type: 'item_picked', uid: closestItem.uid });
       } else {
         setCapacityWarning(true);
         setTimeout(() => setCapacityWarning(false), 2000);
@@ -191,6 +304,7 @@ function App() {
     if (distToShelter <= SHELTER_POS.radius) {
       if (inventoryRef.current.length > 0) {
         shelterItemsRef.current = [...shelterItemsRef.current, ...inventoryRef.current];
+        if (conn && !isHost) conn.send({ type: 'shelter_enter', inv: [...inventoryRef.current] });
         inventoryRef.current = [];
         setInventory([]);
       }
@@ -207,139 +321,173 @@ function App() {
 
 
   /* =========================================================
-     PHASE 2: SURVIVAL MANTIKLARI
+     PHASE 2 (SURVIVAL MANTIKLARI)
      ========================================================= */
 
   const setupSurvival = () => {
+    // Sadece Host burayı çalıştırıp Client'a yollar. Single ise direkt çalışır.
+    if (isMultiplayer && !isHost) return; 
+
     const saved = shelterItemsRef.current;
     
     const survs = [{
-      id: 'me', name: 'Sen', icon: '👤',
+      id: 'me', name: isMultiplayer ? 'Oyuncu 1' : 'Sen', icon: '👤',
       isAlive: true, isSick: false, 
       needsFood: false, needsWater: false, 
       daysHungry: 0, daysThirsty: 0, daysSick: 0, 
       status: 'shelter', expeditionDays: 0
     }];
 
+    if (isMultiplayer) {
+      survs.push({ id: 'p2', name: 'Oyuncu 2', icon: '🧑‍🤝‍🧑', isAlive: true, isSick: false, needsFood: false, needsWater: false, daysHungry: 0, daysThirsty: 0, daysSick: 0, status: 'shelter', expeditionDays: 0 });
+    }
+
     const hasChild = saved.some(i => i.id === 'child');
     const hasSpouse = saved.some(i => i.id === 'spouse');
-    
     if (hasChild) survs.push({ id: 'child', name: 'Çocuk', icon: '🧒', isAlive: true, isSick: false, needsFood: false, needsWater: false, daysHungry: 0, daysThirsty: 0, daysSick: 0, status: 'shelter', expeditionDays: 0 });
-    if (hasSpouse) survs.push({ id: 'spouse', name: 'Eş', icon: '🧑', isAlive: true, isSick: false, needsFood: false, needsWater: false, daysHungry: 0, daysThirsty: 0, daysSick: 0, status: 'shelter', expeditionDays: 0 });
-
-    setSurvivors(survs);
+    if (hasSpouse && !isMultiplayer) survs.push({ id: 'spouse', name: 'Eş', icon: '🧑', isAlive: true, isSick: false, needsFood: false, needsWater: false, daysHungry: 0, daysThirsty: 0, daysSick: 0, status: 'shelter', expeditionDays: 0 });
 
     const initialSupplies = { soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0, gun: 0, ammo: 0 };
     saved.forEach(item => {
-      if (initialSupplies[item.id] !== undefined) {
-        initialSupplies[item.id]++;
-      }
+      if (initialSupplies[item.id] !== undefined) initialSupplies[item.id]++;
     });
     
     setSupplies(initialSupplies);
+    setSurvivors(survs);
     setDay(1);
-    setLogs(['Sığınağa ulaştınız. Kapı kapandı.']);
+    const initialLogs = ['Sığınağa ulaştınız. Kapı kapandı.'];
+    setLogs(initialLogs);
     setGameState('survival');
+
+    if (isMultiplayer && isHost && conn) {
+      conn.send({ type: 'survival_sync', supplies: initialSupplies, survivors: survs, day: 1, logs: initialLogs });
+    }
   };
 
-  const nextDayRef = useRef(null);
-  
-  useEffect(() => {
-    nextDayRef.current = nextDay;
-  });
-
-  useEffect(() => {
-    if (gameState === 'survival' && !eventModal) {
-      // 5 Dakika (300,000 milisaniye) otomatik ilerleme
-      const timer = setInterval(() => {
-        if(nextDayRef.current) nextDayRef.current();
-      }, 300000); 
-      return () => clearInterval(timer);
+  // State Senkronizasyonu (Her işlemden sonra host gönderir)
+  const syncState = (newSupplies, newSurvivors, newDay, newLogs, newEventModal) => {
+    setSupplies(newSupplies);
+    setSurvivors(newSurvivors);
+    setDay(newDay);
+    setLogs(newLogs);
+    setEventModal(newEventModal);
+    setLocalReady(false);
+    setRemoteReady(false);
+    if (conn && isHost) {
+      conn.send({ type: 'state_sync', supplies: newSupplies, survivors: newSurvivors, day: newDay, logs: newLogs, eventModal: newEventModal });
     }
-  }, [gameState, eventModal]);
+  };
 
-  // ---- EVENT AKSİYONLARI ----
+  const executeEventChoiceLocally = (idx) => {
+    if(eventModal && eventModal.options[idx]) {
+      eventModal.options[idx].action();
+    }
+  };
+
+  const handleEventChoice = (idx) => {
+    if (isMultiplayer && conn) conn.send({ type: 'action', action: 'eventChoice', choiceIdx: idx });
+    executeEventChoiceLocally(idx);
+  };
+
+  // Ortak Event Aksiyonları
   const fireGun = () => {
-    setSupplies(prev => ({ ...prev, ammo: prev.ammo - 1 }));
-    setLogs(prev => [`[Gün ${day}] Silahı ateşleyip haydutları korkutarak kaçırdınız! (-1 Mermi)`, ...prev]);
-    setEventModal(null);
+    const newSup = { ...supplies, ammo: supplies.ammo - 1 };
+    const newLogs = [`[Gün ${day}] Silahı ateşleyip haydutları korkutarak kaçırdınız! (-1 Mermi)`, ...logs];
+    syncState(newSup, survivors, day, newLogs, null);
   };
 
   const hideFromBandits = () => {
+    let newSup = { ...supplies };
+    let newLogs = [...logs];
     if (Math.random() < 0.5) {
-      setLogs(prev => [`[Gün ${day}] Haydutlar kapıyı kırdı ve erzak çaldılar! (-1 Çorba, -1 Su)`, ...prev]);
-      setSupplies(prev => ({ ...prev, soup: Math.max(0, prev.soup - 1), water: Math.max(0, prev.water - 1) }));
+      newLogs.unshift(`[Gün ${day}] Haydutlar kapıyı kırdı ve erzak çaldılar! (-1 Çorba, -1 Su)`);
+      newSup.soup = Math.max(0, newSup.soup - 1);
+      newSup.water = Math.max(0, newSup.water - 1);
     } else {
-      setLogs(prev => [`[Gün ${day}] Ses çıkarmadınız. Haydutlar kapıyı zorlayıp vazgeçtiler.`, ...prev]);
+      newLogs.unshift(`[Gün ${day}] Ses çıkarmadınız. Haydutlar kapıyı zorlayıp vazgeçtiler.`);
     }
-    setEventModal(null);
+    syncState(newSup, survivors, day, newLogs, null);
   };
 
   const tradeWithStranger = (accept) => {
+    let newSup = { ...supplies };
+    let newLogs = [...logs];
     if (accept) {
-      setSupplies(prev => ({ ...prev, water: prev.water - 1, ammo: prev.ammo + 2 }));
-      setLogs(prev => [`[Gün ${day}] Yaşlı adama su verdiniz. O da masaya 2 Mermi bıraktı.`, ...prev]);
+      newSup.water -= 1;
+      newSup.ammo += 2;
+      newLogs.unshift(`[Gün ${day}] Yaşlı adama su verdiniz. O da masaya 2 Mermi bıraktı.`);
     } else {
-      setLogs(prev => [`[Gün ${day}] Yabancıya kapıyı açmadınız. Homurdanarak uzaklaştı.`, ...prev]);
+      newLogs.unshift(`[Gün ${day}] Yabancıya kapıyı açmadınız. Homurdanarak uzaklaştı.`);
     }
-    setEventModal(null);
+    syncState(newSup, survivors, day, newLogs, null);
   };
 
   const simpleAck = (msg) => {
-    setLogs(prev => [`[Gün ${day}] ${msg}`, ...prev]);
-    setEventModal(null);
-  }
+    syncState(supplies, survivors, day, [`[Gün ${day}] ${msg}`, ...logs], null);
+  };
 
-  // ---------------------------
+  // Sonraki Gün
+  const tryNextDay = () => {
+    if (isMultiplayer) {
+      setLocalReady(true);
+      if (conn) conn.send({ type: 'ready' });
+      if (remoteReady) processNextDay();
+    } else {
+      processNextDay();
+    }
+  };
 
-  const nextDay = () => {
+  useEffect(() => {
+    if (isMultiplayer && localReady && remoteReady && isHost) {
+      processNextDay();
+    }
+  }, [localReady, remoteReady]);
+
+
+  const processNextDay = () => {
+    if (isMultiplayer && !isHost) return; // Client hesaplamaz, Host'tan bekler.
+
     let currentLog = [];
     let newSupplies = { ...supplies };
     const nextDayNum = day + 1;
-    let eventTriggered = false;
+    let newEvent = null;
 
-    // EVENT (RASTGELE OLAY) KONTROLÜ (%25 şans)
     const eventChance = Math.random();
     if (eventChance < 0.25) {
-      eventTriggered = true;
       const eventType = Math.random();
-      
       if (eventType < 0.3) {
-        // Hediye (Eski mantık)
         newSupplies.water += 1;
         newSupplies.soup += 1;
-        setEventModal({
+        newEvent = {
           title: 'Sürpriz Paket!',
           msg: 'Kapıya gizemli biri paket bırakmış! (+1 Su, +1 Çorba)',
           options: [{ label: 'Tamam', condition: true, action: () => simpleAck('Dışarıdan erzak yardımı geldi.') }]
-        });
+        };
       } else if (eventType < 0.65) {
-        // Haydut Saldırısı
-        setEventModal({
+        newEvent = {
           title: 'Haydutlar Geldi!',
-          msg: 'Yüzü maskeli, baltalı adamlar kapıya vuruyor! İçeri girmeye çalışıyorlar.',
+          msg: 'Yüzü maskeli adamlar kapıya vuruyor! İçeri girmeye çalışıyorlar.',
           options: [
             { label: 'Silahla Vur (-1 Mermi)', condition: newSupplies.gun > 0 && newSupplies.ammo > 0, action: fireGun, type: 'action' },
             { label: 'Sessiz Ol (Saklan)', condition: true, action: hideFromBandits, type: 'danger' }
           ]
-        });
+        };
       } else {
-        // İyi Niyetli Takas
-        setEventModal({
+        newEvent = {
           title: 'Yaşlı Bir Adam',
           msg: 'Bitkin düşmüş yaşlı bir adam kapınızı çalıyor. Karşılığında eşya vereceğini söyleyerek 1 Su istiyor.',
           options: [
             { label: '1 Su Ver (Kapıyı Aç)', condition: newSupplies.water > 0, action: () => tradeWithStranger(true), type: 'action' },
             { label: 'Açma (Risk Alma)', condition: true, action: () => tradeWithStranger(false), type: 'danger' }
           ]
-        });
+        };
       }
     } else if (eventChance > 0.90 && newSupplies.radio > 0) {
       currentLog.push('Radyodan diğer sığınaklardaki insanların seslerini duydunuz. Umut arttı.');
     }
 
-    const shouldNeedFood = (nextDayNum % 5 === 0); // 5 günde bir acıkır
-    const shouldNeedWater = (nextDayNum % 3 === 0); // 3 günde bir susar
+    const shouldNeedFood = (nextDayNum % 5 === 0); 
+    const shouldNeedWater = (nextDayNum % 3 === 0); 
 
     let newSurvivors = survivors.map(s => {
       if (!s.isAlive) return s;
@@ -354,7 +502,7 @@ function App() {
             ns.expeditionDays = 0;
             const foundWater = Math.floor(Math.random() * 3);
             const foundSoup = Math.floor(Math.random() * 3);
-            const foundAmmo = Math.random() < 0.5 ? 1 : 0; // %50 ihtimalle mermi de bulur
+            const foundAmmo = Math.random() < 0.5 ? 1 : 0; 
             newSupplies.water += foundWater;
             newSupplies.soup += foundSoup;
             newSupplies.ammo += foundAmmo;
@@ -367,8 +515,8 @@ function App() {
         return ns; 
       }
 
-      if (shouldNeedFood) { ns.needsFood = true; }
-      if (shouldNeedWater) { ns.needsWater = true; }
+      if (shouldNeedFood) ns.needsFood = true; 
+      if (shouldNeedWater) ns.needsWater = true; 
       if (shouldNeedFood || shouldNeedWater) currentLog.push(`${ns.name} acıktı/susadı.`);
 
       if (ns.needsFood) ns.daysHungry++;
@@ -396,48 +544,66 @@ function App() {
       return ns;
     });
 
-    setSupplies(newSupplies);
-    setSurvivors(newSurvivors);
-    setDay(nextDayNum);
+    let newLogs = [...logs];
+    if (currentLog.length > 0) newLogs.unshift(`[Gün ${nextDayNum}] ${currentLog.join(' ')}`);
 
-    if (currentLog.length > 0) {
-      setLogs(prev => [`[Gün ${nextDayNum}] ${currentLog.join(' ')}`, ...prev]);
-    }
+    syncState(newSupplies, newSurvivors, nextDayNum, newLogs, newEvent);
 
     if (newSurvivors.every(s => !s.isAlive)) {
       setGameState('gameover');
+      if (conn) conn.send({ type: 'gameover' });
     }
   };
 
-  const feedSurvivor = (id) => {
-    if (supplies.soup > 0) {
-      setSupplies({ ...supplies, soup: supplies.soup - 1 });
-      setSurvivors(survivors.map(s => s.id === id ? { ...s, needsFood: false, daysHungry: 0 } : s));
-      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} çorba içti.`, ...prev]);
+  // 5 Dakikalık Otomatik İlerleme
+  const nextDayRef = useRef(null);
+  useEffect(() => { nextDayRef.current = tryNextDay; });
+  useEffect(() => {
+    if (gameState === 'survival' && !eventModal) {
+      const timer = setInterval(() => {
+        if(nextDayRef.current) nextDayRef.current();
+      }, 300000); 
+      return () => clearInterval(timer);
+    }
+  }, [gameState, eventModal]);
+
+
+  // Manuel Olay Tetikleyicileri (Ortak)
+  const executeActionLocally = (action, id) => {
+    if (action === 'feed' && supplies.soup > 0) {
+      const newSup = { ...supplies, soup: supplies.soup - 1 };
+      const newSurv = survivors.map(s => s.id === id ? { ...s, needsFood: false, daysHungry: 0 } : s);
+      const newLogs = [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} çorba içti.`, ...logs];
+      if(isHost || !isMultiplayer) syncState(newSup, newSurv, day, newLogs, eventModal);
+    }
+    else if (action === 'water' && supplies.water > 0) {
+      const newSup = { ...supplies, water: supplies.water - 1 };
+      const newSurv = survivors.map(s => s.id === id ? { ...s, needsWater: false, daysThirsty: 0 } : s);
+      const newLogs = [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} su içti.`, ...logs];
+      if(isHost || !isMultiplayer) syncState(newSup, newSurv, day, newLogs, eventModal);
+    }
+    else if (action === 'heal' && supplies.medkit > 0) {
+      const newSup = { ...supplies, medkit: supplies.medkit - 1 };
+      const newSurv = survivors.map(s => s.id === id ? { ...s, isSick: false, daysSick: 0 } : s);
+      const newLogs = [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} tedavi edildi.`, ...logs];
+      if(isHost || !isMultiplayer) syncState(newSup, newSurv, day, newLogs, eventModal);
+    }
+    else if (action === 'expedition') {
+      const newSurv = survivors.map(s => s.id === id ? { ...s, status: 'expedition', expeditionDays: 0 } : s);
+      const newLogs = [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} dışarı keşfe gönderildi.`, ...logs];
+      if(isHost || !isMultiplayer) syncState(supplies, newSurv, day, newLogs, eventModal);
     }
   };
 
-  const waterSurvivor = (id) => {
-    if (supplies.water > 0) {
-      setSupplies({ ...supplies, water: supplies.water - 1 });
-      setSurvivors(survivors.map(s => s.id === id ? { ...s, needsWater: false, daysThirsty: 0 } : s));
-      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} su içti.`, ...prev]);
-    }
+  const handleAction = (action, id) => {
+    if (isMultiplayer && conn) conn.send({ type: 'action', action, id });
+    executeActionLocally(action, id);
   };
 
-  const healSurvivor = (id) => {
-    if (supplies.medkit > 0) {
-      setSupplies({ ...supplies, medkit: supplies.medkit - 1 });
-      setSurvivors(survivors.map(s => s.id === id ? { ...s, isSick: false, daysSick: 0 } : s));
-      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} tedavi edildi.`, ...prev]);
-    }
-  };
 
-  const sendExpedition = (id) => {
-    setSurvivors(survivors.map(s => s.id === id ? { ...s, status: 'expedition', expeditionDays: 0 } : s));
-    setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} dışarı keşfe gönderildi.`, ...prev]);
-  };
-
+  /* =========================================================
+     RENDER
+     ========================================================= */
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
@@ -453,10 +619,39 @@ function App() {
         <div className="overlay-screen">
           <h1 className="title">☢️ 60 SANİYE ☢️</h1>
           <p className="desc">
-            Nükleer sirenler çalıyor! Sığınağa girmeden önce eşyaları topla.<br/>
-            Eşyaları almak için <strong>E</strong> tuşuna (veya butonuna) bas. Kapasite (5).
+            Nükleer sirenler çalıyor! Sığınağa girmeden önce eşyaları topla.
           </p>
-          <button className="btn" onClick={startGame}>OYUNA BAŞLA</button>
+          
+          {!peerId && !isMultiplayer && (
+            <div className="menu-buttons" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button className="btn" onClick={startSinglePlayer}>TEK OYUNCULU</button>
+              <button className="btn action" onClick={hostRoom}>ODA KUR (CO-OP)</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input 
+                  type="text" 
+                  placeholder="Oda Kodu Girin" 
+                  value={joinId} 
+                  onChange={e => setJoinId(e.target.value)}
+                  style={{ padding: '0.8rem', fontSize: '1.2rem', borderRadius: '8px', border: 'none' }}
+                />
+                <button className="btn warning" onClick={joinRoom} disabled={!joinId}>ODAYA KATIL</button>
+              </div>
+            </div>
+          )}
+
+          {isMultiplayer && isHost && peerId && (
+            <div style={{ background: '#222', padding: '2rem', borderRadius: '12px' }}>
+              <h3>Oda Kuruldu!</h3>
+              <p>Arkadaşınızın odaya katılabilmesi için şu kodu gönderin:</p>
+              <h2 style={{ color: '#3b82f6', userSelect: 'all' }}>{peerId}</h2>
+              <p style={{ fontSize: '1rem', opacity: 0.7 }}>Arkadaşınız kodu girip bağlandığında oyun otomatik başlayacaktır.</p>
+            </div>
+          )}
+
+          {isMultiplayer && !isHost && !conn && (
+            <p>Bağlanılıyor...</p>
+          )}
+
         </div>
       )}
 
@@ -493,46 +688,30 @@ function App() {
                 );
               })}
 
-              <div className="player" style={{ left: playerPos.x, top: playerPos.y }}>
-                🏃
+              <div className="player" style={{ left: playerPos.x, top: playerPos.y }}>🏃
                 {capacityWarning && <div className="capacity-warning">Dolu!</div>}
               </div>
+
+              {/* ARKADAŞIN KARAKTERİ */}
+              {isMultiplayer && (
+                 <div className="player remote" style={{ left: remotePlayerPos.x, top: remotePlayerPos.y, background: '#ef4444', borderColor: '#f87171' }}>🏃</div>
+              )}
             </div>
           </div>
 
           <div className="mobile-controls">
             <div className="d-pad">
-              <button 
-                className="btn-dir up" 
-                onPointerDown={() => handleControlStart('w')} onPointerUp={() => handleControlEnd('w')}
-                onTouchStart={() => handleControlStart('w')} onTouchEnd={() => handleControlEnd('w')}
-              >▲</button>
+              <button className="btn-dir up" onPointerDown={() => handleControlStart('w')} onPointerUp={() => handleControlEnd('w')} onTouchStart={() => handleControlStart('w')} onTouchEnd={() => handleControlEnd('w')}>▲</button>
               <div className="d-pad-middle">
-                <button 
-                  className="btn-dir left" 
-                  onPointerDown={() => handleControlStart('a')} onPointerUp={() => handleControlEnd('a')}
-                  onTouchStart={() => handleControlStart('a')} onTouchEnd={() => handleControlEnd('a')}
-                >◀</button>
+                <button className="btn-dir left" onPointerDown={() => handleControlStart('a')} onPointerUp={() => handleControlEnd('a')} onTouchStart={() => handleControlStart('a')} onTouchEnd={() => handleControlEnd('a')}>◀</button>
                 <div className="d-pad-center"></div>
-                <button 
-                  className="btn-dir right" 
-                  onPointerDown={() => handleControlStart('d')} onPointerUp={() => handleControlEnd('d')}
-                  onTouchStart={() => handleControlStart('d')} onTouchEnd={() => handleControlEnd('d')}
-                >▶</button>
+                <button className="btn-dir right" onPointerDown={() => handleControlStart('d')} onPointerUp={() => handleControlEnd('d')} onTouchStart={() => handleControlStart('d')} onTouchEnd={() => handleControlEnd('d')}>▶</button>
               </div>
-              <button 
-                className="btn-dir down" 
-                onPointerDown={() => handleControlStart('s')} onPointerUp={() => handleControlEnd('s')}
-                onTouchStart={() => handleControlStart('s')} onTouchEnd={() => handleControlEnd('s')}
-              >▼</button>
+              <button className="btn-dir down" onPointerDown={() => handleControlStart('s')} onPointerUp={() => handleControlEnd('s')} onTouchStart={() => handleControlStart('s')} onTouchEnd={() => handleControlEnd('s')}>▼</button>
             </div>
             
             <div className="action-pad">
-              <button 
-                className="btn-action e-btn"
-                onPointerDown={() => handleControlStart('e')} onPointerUp={() => handleControlEnd('e')}
-                onTouchStart={() => handleControlStart('e')} onTouchEnd={() => handleControlEnd('e')}
-              >E</button>
+              <button className="btn-action e-btn" onPointerDown={() => handleControlStart('e')} onPointerUp={() => handleControlEnd('e')} onTouchStart={() => handleControlStart('e')} onTouchEnd={() => handleControlEnd('e')}>E</button>
             </div>
           </div>
         </>
@@ -541,7 +720,6 @@ function App() {
       {gameState === 'survival' && (
         <div className="survival-screen">
           
-          {/* İNTERAKTİF EVENT MODALI */}
           {eventModal && (
             <div className="event-modal">
               <div className="event-box">
@@ -552,9 +730,8 @@ function App() {
                     <button 
                       key={i} 
                       className={`btn event-btn ${opt.type || ''}`} 
-                      onClick={opt.action}
+                      onClick={() => handleEventChoice(i)}
                       disabled={!opt.condition}
-                      title={!opt.condition ? "Bunun için gerekli eşyan yok." : ""}
                     >
                       {opt.label}
                     </button>
@@ -566,8 +743,13 @@ function App() {
 
           <div className="survival-header">
             <h1>{day}. GÜN</h1>
-            {/* Olay varken gün atlanmasın */}
-            <button className="btn next-day-btn" onClick={nextDay} disabled={eventModal !== null}>SONRAKİ GÜN ⏭️</button>
+            <button 
+              className={`btn next-day-btn ${localReady ? 'ready' : ''}`} 
+              onClick={tryNextDay} 
+              disabled={eventModal !== null || localReady}
+            >
+              {localReady ? (isMultiplayer ? 'Arkadaşınız Bekleniyor...' : 'Bekleniyor...') : 'SONRAKİ GÜN ⏭️'}
+            </button>
           </div>
 
           <div className="survival-content">
@@ -605,10 +787,10 @@ function App() {
                     
                     {s.isAlive && s.status !== 'expedition' && (
                       <div className="survivor-actions">
-                        <button onClick={() => feedSurvivor(s.id)} disabled={supplies.soup <= 0 || !s.needsFood || eventModal !== null} title="Yedir">🥫</button>
-                        <button onClick={() => waterSurvivor(s.id)} disabled={supplies.water <= 0 || !s.needsWater || eventModal !== null} title="İçir">💧</button>
-                        <button onClick={() => healSurvivor(s.id)} disabled={supplies.medkit <= 0 || !s.isSick || eventModal !== null} title="İyileştir">🩹</button>
-                        <button onClick={() => sendExpedition(s.id)} disabled={eventModal !== null} title="Keşfe Gönder">🗺️</button>
+                        <button onClick={() => handleAction('feed', s.id)} disabled={supplies.soup <= 0 || !s.needsFood || eventModal !== null} title="Yedir">🥫</button>
+                        <button onClick={() => handleAction('water', s.id)} disabled={supplies.water <= 0 || !s.needsWater || eventModal !== null} title="İçir">💧</button>
+                        <button onClick={() => handleAction('heal', s.id)} disabled={supplies.medkit <= 0 || !s.isSick || eventModal !== null} title="İyileştir">🩹</button>
+                        <button onClick={() => handleAction('expedition', s.id)} disabled={eventModal !== null} title="Keşfe Gönder">🗺️</button>
                       </div>
                     )}
                   </div>
