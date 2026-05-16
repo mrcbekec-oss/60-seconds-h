@@ -6,7 +6,7 @@ const ARENA_HEIGHT = 800;
 const PLAYER_SIZE = 40;
 const SPEED = 6;
 const MAX_CAPACITY = 5;
-const START_TIME = 10;
+const START_TIME = 15;
 const INTERACTION_DISTANCE = 60; 
 const SHELTER_POS = { x: 700, y: 400, radius: 100 };
 
