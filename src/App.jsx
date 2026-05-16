@@ -19,6 +19,8 @@ const ITEM_TYPES = [
   { id: 'medkit', name: 'İlk Yardım', size: 2, icon: '🩹', spawn: [1, 2] },
   { id: 'axe', name: 'Balta', size: 2, icon: '🪓', spawn: [1, 1] },
   { id: 'mask', name: 'Gaz Maskesi', size: 1, icon: '🤿', spawn: [1, 2] },
+  { id: 'gun', name: 'Silah', size: 2, icon: '🔫', spawn: [1, 1] },
+  { id: 'ammo', name: 'Mermi', size: 1, icon: '🔘', spawn: [2, 3] },
 ];
 
 function App() {
@@ -40,7 +42,7 @@ function App() {
   // Phase 2 (Sığınak / Survival) Stateleri
   const [day, setDay] = useState(1);
   const [survivors, setSurvivors] = useState([]);
-  const [supplies, setSupplies] = useState({ soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0 });
+  const [supplies, setSupplies] = useState({ soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0, gun: 0, ammo: 0 });
   const [logs, setLogs] = useState([]);
   const [eventModal, setEventModal] = useState(null);
 
@@ -78,7 +80,6 @@ function App() {
     setCapacityWarning(false);
   };
 
-  // Phase 1 (Saniye)
   useEffect(() => {
     let timerId;
     if (gameState === 'playing') {
@@ -95,7 +96,6 @@ function App() {
     return () => clearInterval(timerId);
   }, [gameState]);
 
-  // Phase 1 Bitişi
   useEffect(() => {
     if (timeLeft === 0 && gameState === 'playing') {
       const distToShelter = Math.hypot(
@@ -103,14 +103,13 @@ function App() {
         playerRef.current.y - SHELTER_POS.y
       );
       if (distToShelter <= SHELTER_POS.radius + 20) {
-        setupSurvival(); // Sığınağa geçti
+        setupSurvival(); 
       } else {
         setGameState('gameover'); 
       }
     }
   }, [timeLeft, gameState]);
 
-  // Klavye Dinleyicileri (Sadece Playing)
   useEffect(() => {
     const handleKeyDown = (e) => {
       const key = e.key.toLowerCase();
@@ -142,11 +141,9 @@ function App() {
     };
   }, [gameState]);
 
-  // Mobil Kontrol Butonları için Fonksiyonlar
   const handleControlStart = (key) => { keysRef.current[key] = true; };
   const handleControlEnd = (key) => { keysRef.current[key] = false; };
 
-  // Oyun Döngüsü
   const updateGame = () => {
     if (gameState !== 'playing') return;
 
@@ -208,16 +205,14 @@ function App() {
     return () => cancelAnimationFrame(requestRef.current);
   }, [gameState]);
 
+
   /* =========================================================
      PHASE 2: SURVIVAL MANTIKLARI
      ========================================================= */
 
-  const addLog = (msg) => setLogs(prev => [`[Gün ${day}] ${msg}`, ...prev]);
-
   const setupSurvival = () => {
     const saved = shelterItemsRef.current;
     
-    // Varsayılan Ana Karakter
     const survs = [{
       id: 'me', name: 'Sen', icon: '👤',
       isAlive: true, isSick: false, 
@@ -226,7 +221,6 @@ function App() {
       status: 'shelter', expeditionDays: 0
     }];
 
-    // Toplanan İnsanlar
     const hasChild = saved.some(i => i.id === 'child');
     const hasSpouse = saved.some(i => i.id === 'spouse');
     
@@ -235,7 +229,7 @@ function App() {
 
     setSurvivors(survs);
 
-    const initialSupplies = { soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0 };
+    const initialSupplies = { soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0, gun: 0, ammo: 0 };
     saved.forEach(item => {
       if (initialSupplies[item.id] !== undefined) {
         initialSupplies[item.id]++;
@@ -248,32 +242,93 @@ function App() {
     setGameState('survival');
   };
 
+  // ---- EVENT AKSİYONLARI ----
+  const fireGun = () => {
+    setSupplies(prev => ({ ...prev, ammo: prev.ammo - 1 }));
+    setLogs(prev => [`[Gün ${day}] Silahı ateşleyip haydutları korkutarak kaçırdınız! (-1 Mermi)`, ...prev]);
+    setEventModal(null);
+  };
+
+  const hideFromBandits = () => {
+    if (Math.random() < 0.5) {
+      setLogs(prev => [`[Gün ${day}] Haydutlar kapıyı kırdı ve erzak çaldılar! (-1 Çorba, -1 Su)`, ...prev]);
+      setSupplies(prev => ({ ...prev, soup: Math.max(0, prev.soup - 1), water: Math.max(0, prev.water - 1) }));
+    } else {
+      setLogs(prev => [`[Gün ${day}] Ses çıkarmadınız. Haydutlar kapıyı zorlayıp vazgeçtiler.`, ...prev]);
+    }
+    setEventModal(null);
+  };
+
+  const tradeWithStranger = (accept) => {
+    if (accept) {
+      setSupplies(prev => ({ ...prev, water: prev.water - 1, ammo: prev.ammo + 2 }));
+      setLogs(prev => [`[Gün ${day}] Yaşlı adama su verdiniz. O da masaya 2 Mermi bıraktı.`, ...prev]);
+    } else {
+      setLogs(prev => [`[Gün ${day}] Yabancıya kapıyı açmadınız. Homurdanarak uzaklaştı.`, ...prev]);
+    }
+    setEventModal(null);
+  };
+
+  const simpleAck = (msg) => {
+    setLogs(prev => [`[Gün ${day}] ${msg}`, ...prev]);
+    setEventModal(null);
+  }
+
+  // ---------------------------
+
   const nextDay = () => {
     let currentLog = [];
     let newSupplies = { ...supplies };
-    
-    // 1. Rastgele Olay (Random Event)
+    const nextDayNum = day + 1;
+    let eventTriggered = false;
+
+    // EVENT (RASTGELE OLAY) KONTROLÜ (%25 şans)
     const eventChance = Math.random();
-    if (eventChance < 0.15) {
-      newSupplies.water += 1;
-      newSupplies.soup += 1;
-      setEventModal({ type: 'gift', msg: 'Kapıya gizemli biri paket bırakmış! +1 Su, +1 Çorba' });
-      currentLog.push('Dışarıdan erzak yardımı geldi.');
-    } else if (eventChance > 0.85 && newSupplies.radio > 0) {
-      currentLog.push('Radyodan diğer sığınaklardaki insanların seslerini duydunuz. Moral arttı.');
+    if (eventChance < 0.25) {
+      eventTriggered = true;
+      const eventType = Math.random();
+      
+      if (eventType < 0.3) {
+        // Hediye (Eski mantık)
+        newSupplies.water += 1;
+        newSupplies.soup += 1;
+        setEventModal({
+          title: 'Sürpriz Paket!',
+          msg: 'Kapıya gizemli biri paket bırakmış! (+1 Su, +1 Çorba)',
+          options: [{ label: 'Tamam', condition: true, action: () => simpleAck('Dışarıdan erzak yardımı geldi.') }]
+        });
+      } else if (eventType < 0.65) {
+        // Haydut Saldırısı
+        setEventModal({
+          title: 'Haydutlar Geldi!',
+          msg: 'Yüzü maskeli, baltalı adamlar kapıya vuruyor! İçeri girmeye çalışıyorlar.',
+          options: [
+            { label: 'Silahla Vur (-1 Mermi)', condition: newSupplies.gun > 0 && newSupplies.ammo > 0, action: fireGun, type: 'action' },
+            { label: 'Sessiz Ol (Saklan)', condition: true, action: hideFromBandits, type: 'danger' }
+          ]
+        });
+      } else {
+        // İyi Niyetli Takas
+        setEventModal({
+          title: 'Yaşlı Bir Adam',
+          msg: 'Bitkin düşmüş yaşlı bir adam kapınızı çalıyor. Karşılığında eşya vereceğini söyleyerek 1 Su istiyor.',
+          options: [
+            { label: '1 Su Ver (Kapıyı Aç)', condition: newSupplies.water > 0, action: () => tradeWithStranger(true), type: 'action' },
+            { label: 'Açma (Risk Alma)', condition: true, action: () => tradeWithStranger(false), type: 'danger' }
+          ]
+        });
+      }
+    } else if (eventChance > 0.90 && newSupplies.radio > 0) {
+      currentLog.push('Radyodan diğer sığınaklardaki insanların seslerini duydunuz. Umut arttı.');
     }
 
-    const nextDayNum = day + 1;
-    // İhtiyaç Kontrolü
-    const shouldNeedFood = (nextDayNum % 3 === 0);
-    const shouldNeedWater = (nextDayNum % 3 === 0);
+    const shouldNeedFood = (nextDayNum % 5 === 0); // 5 günde bir acıkır
+    const shouldNeedWater = (nextDayNum % 3 === 0); // 3 günde bir susar
 
     let newSurvivors = survivors.map(s => {
       if (!s.isAlive) return s;
-
       let ns = { ...s };
 
-      // Keşif mantığı
       if (ns.status === 'expedition') {
         ns.expeditionDays++;
         if (ns.expeditionDays >= 3) {
@@ -283,9 +338,11 @@ function App() {
             ns.expeditionDays = 0;
             const foundWater = Math.floor(Math.random() * 3);
             const foundSoup = Math.floor(Math.random() * 3);
+            const foundAmmo = Math.random() < 0.5 ? 1 : 0; // %50 ihtimalle mermi de bulur
             newSupplies.water += foundWater;
             newSupplies.soup += foundSoup;
-            currentLog.push(`${ns.name} keşiften döndü! (+${foundWater} Su, +${foundSoup} Çorba)`);
+            newSupplies.ammo += foundAmmo;
+            currentLog.push(`${ns.name} keşiften döndü! (+${foundWater} Su, +${foundSoup} Çorba ${foundAmmo > 0 ? ', +1 Mermi' : ''})`);
           } else {
             ns.isAlive = false;
             currentLog.push(`⚠️ ${ns.name} keşfe çıktı ve bir daha geri dönmedi...`);
@@ -294,7 +351,6 @@ function App() {
         return ns; 
       }
 
-      // Sığınaktakilerin ihtiyaçları
       if (shouldNeedFood) { ns.needsFood = true; }
       if (shouldNeedWater) { ns.needsWater = true; }
       if (shouldNeedFood || shouldNeedWater) currentLog.push(`${ns.name} acıktı/susadı.`);
@@ -302,7 +358,6 @@ function App() {
       if (ns.needsFood) ns.daysHungry++;
       if (ns.needsWater) ns.daysThirsty++;
       
-      // Hastalık iyileşme şansı (%20)
       if (ns.isSick) {
         if (Math.random() < 0.20) {
           ns.isSick = false;
@@ -313,13 +368,11 @@ function App() {
         }
       }
 
-      // Yeni Hastalık ihtimali
       if (!ns.isSick && Math.random() < 0.05) {
         ns.isSick = true;
         currentLog.push(`${ns.name} hastalandı!`);
       }
 
-      // Ölüm Kontrolü (Susuz: 3 gün, Aç: 5 gün, Hasta: 6 gün)
       if (ns.daysThirsty >= 3) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} susuzluktan öldü!`); }
       else if (ns.daysHungry >= 5) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} açlıktan öldü!`); }
       else if (ns.daysSick >= 6) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} hastalıktan öldü!`); }
@@ -344,7 +397,7 @@ function App() {
     if (supplies.soup > 0) {
       setSupplies({ ...supplies, soup: supplies.soup - 1 });
       setSurvivors(survivors.map(s => s.id === id ? { ...s, needsFood: false, daysHungry: 0 } : s));
-      addLog(`${survivors.find(s=>s.id===id).name} çorba içti.`);
+      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} çorba içti.`, ...prev]);
     }
   };
 
@@ -352,7 +405,7 @@ function App() {
     if (supplies.water > 0) {
       setSupplies({ ...supplies, water: supplies.water - 1 });
       setSurvivors(survivors.map(s => s.id === id ? { ...s, needsWater: false, daysThirsty: 0 } : s));
-      addLog(`${survivors.find(s=>s.id===id).name} su içti.`);
+      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} su içti.`, ...prev]);
     }
   };
 
@@ -360,18 +413,15 @@ function App() {
     if (supplies.medkit > 0) {
       setSupplies({ ...supplies, medkit: supplies.medkit - 1 });
       setSurvivors(survivors.map(s => s.id === id ? { ...s, isSick: false, daysSick: 0 } : s));
-      addLog(`${survivors.find(s=>s.id===id).name} tedavi edildi.`);
+      setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} tedavi edildi.`, ...prev]);
     }
   };
 
   const sendExpedition = (id) => {
     setSurvivors(survivors.map(s => s.id === id ? { ...s, status: 'expedition', expeditionDays: 0 } : s));
-    addLog(`${survivors.find(s=>s.id===id).name} dışarı keşfe gönderildi.`);
+    setLogs(prev => [`[Gün ${day}] ${survivors.find(s=>s.id===id).name} dışarı keşfe gönderildi.`, ...prev]);
   };
 
-  /* =========================================================
-     RENDER
-     ========================================================= */
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
@@ -434,7 +484,6 @@ function App() {
             </div>
           </div>
 
-          {/* MOBİL KONTROLLER */}
           <div className="mobile-controls">
             <div className="d-pad">
               <button 
@@ -475,19 +524,34 @@ function App() {
 
       {gameState === 'survival' && (
         <div className="survival-screen">
+          
+          {/* İNTERAKTİF EVENT MODALI */}
           {eventModal && (
             <div className="event-modal">
               <div className="event-box">
-                <h2>Rastgele Olay</h2>
+                <h2>{eventModal.title}</h2>
                 <p>{eventModal.msg}</p>
-                <button className="btn" onClick={() => setEventModal(null)}>Tamam</button>
+                <div className="event-options">
+                  {eventModal.options.map((opt, i) => (
+                    <button 
+                      key={i} 
+                      className={`btn event-btn ${opt.type || ''}`} 
+                      onClick={opt.action}
+                      disabled={!opt.condition}
+                      title={!opt.condition ? "Bunun için gerekli eşyan yok." : ""}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
           <div className="survival-header">
             <h1>{day}. GÜN</h1>
-            <button className="btn next-day-btn" onClick={nextDay}>SONRAKİ GÜN ⏭️</button>
+            {/* Olay varken gün atlanmasın */}
+            <button className="btn next-day-btn" onClick={nextDay} disabled={eventModal !== null}>SONRAKİ GÜN ⏭️</button>
           </div>
 
           <div className="survival-content">
@@ -500,6 +564,8 @@ function App() {
                 <div className="supply-item">📻 Radyo: <strong>{supplies.radio}</strong></div>
                 <div className="supply-item">🪓 Balta: <strong>{supplies.axe}</strong></div>
                 <div className="supply-item">🤿 Maske: <strong>{supplies.mask}</strong></div>
+                <div className="supply-item highlight">🔫 Silah: <strong>{supplies.gun}</strong></div>
+                <div className="supply-item highlight">🔘 Mermi: <strong>{supplies.ammo}</strong></div>
               </div>
             </div>
 
@@ -523,10 +589,10 @@ function App() {
                     
                     {s.isAlive && s.status !== 'expedition' && (
                       <div className="survivor-actions">
-                        <button onClick={() => feedSurvivor(s.id)} disabled={supplies.soup <= 0 || !s.needsFood} title="Yedir">🥫</button>
-                        <button onClick={() => waterSurvivor(s.id)} disabled={supplies.water <= 0 || !s.needsWater} title="İçir">💧</button>
-                        <button onClick={() => healSurvivor(s.id)} disabled={supplies.medkit <= 0 || !s.isSick} title="İyileştir">🩹</button>
-                        <button onClick={() => sendExpedition(s.id)} title="Keşfe Gönder">🗺️</button>
+                        <button onClick={() => feedSurvivor(s.id)} disabled={supplies.soup <= 0 || !s.needsFood || eventModal !== null} title="Yedir">🥫</button>
+                        <button onClick={() => waterSurvivor(s.id)} disabled={supplies.water <= 0 || !s.needsWater || eventModal !== null} title="İçir">💧</button>
+                        <button onClick={() => healSurvivor(s.id)} disabled={supplies.medkit <= 0 || !s.isSick || eventModal !== null} title="İyileştir">🩹</button>
+                        <button onClick={() => sendExpedition(s.id)} disabled={eventModal !== null} title="Keşfe Gönder">🗺️</button>
                       </div>
                     )}
                   </div>
