@@ -13,8 +13,8 @@ const SHELTER_POS = { x: 700, y: 400, radius: 100 };
 const ITEM_TYPES = [
   { id: 'child', name: 'Çocuk', size: 3, icon: '🧒', spawn: [1, 1] },
   { id: 'spouse', name: 'Eş', size: 3, icon: '🧑', spawn: [1, 1] },
-  { id: 'water', name: 'Su Şişesi', size: 1, icon: '💧', spawn: [6, 8] }, // 6 ile 8 arası
-  { id: 'soup', name: 'Çorba', size: 1, icon: '🥫', spawn: [6, 8] },     // 6 ile 8 arası
+  { id: 'water', name: 'Su Şişesi', size: 1, icon: '💧', spawn: [6, 8] }, 
+  { id: 'soup', name: 'Çorba', size: 1, icon: '🥫', spawn: [6, 8] },     
   { id: 'radio', name: 'Radyo', size: 1, icon: '📻', spawn: [1, 2] },
   { id: 'medkit', name: 'İlk Yardım', size: 2, icon: '🩹', spawn: [1, 2] },
   { id: 'axe', name: 'Balta', size: 2, icon: '🪓', spawn: [1, 1] },
@@ -22,7 +22,7 @@ const ITEM_TYPES = [
 ];
 
 function App() {
-  const [gameState, setGameState] = useState('start'); // start, playing, survival, gameover
+  const [gameState, setGameState] = useState('start'); 
   
   // Phase 1 (Toplama) Stateleri
   const [timeLeft, setTimeLeft] = useState(START_TIME);
@@ -142,6 +142,10 @@ function App() {
     };
   }, [gameState]);
 
+  // Mobil Kontrol Butonları için Fonksiyonlar
+  const handleControlStart = (key) => { keysRef.current[key] = true; };
+  const handleControlEnd = (key) => { keysRef.current[key] = false; };
+
   // Oyun Döngüsü
   const updateGame = () => {
     if (gameState !== 'playing') return;
@@ -231,14 +235,13 @@ function App() {
 
     setSurvivors(survs);
 
-    // Eşyaları objeye dök
     const initialSupplies = { soup: 0, water: 0, medkit: 0, radio: 0, axe: 0, mask: 0 };
     saved.forEach(item => {
       if (initialSupplies[item.id] !== undefined) {
         initialSupplies[item.id]++;
       }
     });
-    // Biraz kıyak geçelim ilk gün için (isteğe bağlı)
+    
     setSupplies(initialSupplies);
     setDay(1);
     setLogs(['Sığınağa ulaştınız. Kapı kapandı.']);
@@ -261,8 +264,9 @@ function App() {
     }
 
     const nextDayNum = day + 1;
-    // 2. İhtiyaç Kontrolü ve Güncellemesi
-    const shouldNeed = (nextDayNum % 3 === 0); // Her 3 günde bir ihtiyaç doğar
+    // İhtiyaç Kontrolü
+    const shouldNeedFood = (nextDayNum % 3 === 0);
+    const shouldNeedWater = (nextDayNum % 3 === 0);
 
     let newSurvivors = survivors.map(s => {
       if (!s.isAlive) return s;
@@ -273,7 +277,6 @@ function App() {
       if (ns.status === 'expedition') {
         ns.expeditionDays++;
         if (ns.expeditionDays >= 3) {
-          // Geri döner (Şans)
           const returnChance = Math.random();
           if (returnChance > 0.3) {
             ns.status = 'shelter';
@@ -288,29 +291,37 @@ function App() {
             currentLog.push(`⚠️ ${ns.name} keşfe çıktı ve bir daha geri dönmedi...`);
           }
         }
-        return ns; // Dışarıdaysa açlık susuzluk artmaz (kendisi bulur varsayımı)
+        return ns; 
       }
 
       // Sığınaktakilerin ihtiyaçları
-      if (shouldNeed) {
-        ns.needsFood = true;
-        ns.needsWater = true;
-        currentLog.push(`${ns.name} acıktı ve susadı.`);
-      }
+      if (shouldNeedFood) { ns.needsFood = true; }
+      if (shouldNeedWater) { ns.needsWater = true; }
+      if (shouldNeedFood || shouldNeedWater) currentLog.push(`${ns.name} acıktı/susadı.`);
 
       if (ns.needsFood) ns.daysHungry++;
       if (ns.needsWater) ns.daysThirsty++;
-      if (ns.isSick) ns.daysSick++;
+      
+      // Hastalık iyileşme şansı (%20)
+      if (ns.isSick) {
+        if (Math.random() < 0.20) {
+          ns.isSick = false;
+          ns.daysSick = 0;
+          currentLog.push(`${ns.name} kendiliğinden iyileşti!`);
+        } else {
+          ns.daysSick++;
+        }
+      }
 
-      // Hastalık ihtimali
+      // Yeni Hastalık ihtimali
       if (!ns.isSick && Math.random() < 0.05) {
         ns.isSick = true;
         currentLog.push(`${ns.name} hastalandı!`);
       }
 
-      // Ölüm Kontrolü
-      if (ns.daysThirsty >= 2) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} susuzluktan öldü!`); }
-      else if (ns.daysHungry >= 4) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} açlıktan öldü!`); }
+      // Ölüm Kontrolü (Susuz: 3 gün, Aç: 5 gün, Hasta: 6 gün)
+      if (ns.daysThirsty >= 3) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} susuzluktan öldü!`); }
+      else if (ns.daysHungry >= 5) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} açlıktan öldü!`); }
       else if (ns.daysSick >= 6) { ns.isAlive = false; currentLog.push(`💀 ${ns.name} hastalıktan öldü!`); }
 
       return ns;
@@ -324,13 +335,11 @@ function App() {
       setLogs(prev => [`[Gün ${nextDayNum}] ${currentLog.join(' ')}`, ...prev]);
     }
 
-    // Herkes öldü mü?
     if (newSurvivors.every(s => !s.isAlive)) {
       setGameState('gameover');
     }
   };
 
-  // Eşya Kullanımı
   const feedSurvivor = (id) => {
     if (supplies.soup > 0) {
       setSupplies({ ...supplies, soup: supplies.soup - 1 });
@@ -374,19 +383,17 @@ function App() {
   return (
     <div className="game-wrapper">
       
-      {/* BAŞLANGIÇ EKRANI */}
       {gameState === 'start' && (
         <div className="overlay-screen">
           <h1 className="title">☢️ 60 SANİYE ☢️</h1>
           <p className="desc">
             Nükleer sirenler çalıyor! Sığınağa girmeden önce eşyaları topla.<br/>
-            Eşyaları almak için <strong>E</strong> tuşuna bas. Kapasite (5).
+            Eşyaları almak için <strong>E</strong> tuşuna (veya butonuna) bas. Kapasite (5).
           </p>
           <button className="btn" onClick={startGame}>OYUNA BAŞLA</button>
         </div>
       )}
 
-      {/* PHASE 1: PLAYING */}
       {gameState === 'playing' && (
         <>
           <div className="ui-panel">
@@ -404,34 +411,70 @@ function App() {
             </div>
           </div>
 
-          <div className="arena">
-            <div className={`shelter ${Math.hypot(playerPos.x - SHELTER_POS.x, playerPos.y - SHELTER_POS.y) < SHELTER_POS.radius ? 'active' : ''}`} style={{ left: SHELTER_POS.x, top: SHELTER_POS.y }}>
-              <div className="shelter-inner">☢️</div>
+          <div className="arena-container">
+            <div className="arena">
+              <div className={`shelter ${Math.hypot(playerPos.x - SHELTER_POS.x, playerPos.y - SHELTER_POS.y) < SHELTER_POS.radius ? 'active' : ''}`} style={{ left: SHELTER_POS.x, top: SHELTER_POS.y }}>
+                <div className="shelter-inner">☢️</div>
+              </div>
+
+              {itemsOnMap.map(item => {
+                const isNear = Math.hypot(playerPos.x - item.x, playerPos.y - item.y) < INTERACTION_DISTANCE;
+                return (
+                  <div key={item.uid} className="item" style={{ left: item.x, top: item.y }}>
+                    {item.icon}
+                    {isNear && <div className="interaction-hint">E ({item.size})</div>}
+                  </div>
+                );
+              })}
+
+              <div className="player" style={{ left: playerPos.x, top: playerPos.y }}>
+                🏃
+                {capacityWarning && <div className="capacity-warning">Dolu!</div>}
+              </div>
             </div>
+          </div>
 
-            {itemsOnMap.map(item => {
-              const isNear = Math.hypot(playerPos.x - item.x, playerPos.y - item.y) < INTERACTION_DISTANCE;
-              return (
-                <div key={item.uid} className="item" style={{ left: item.x, top: item.y }}>
-                  {item.icon}
-                  {isNear && <div className="interaction-hint">E ({item.size})</div>}
-                </div>
-              );
-            })}
-
-            <div className="player" style={{ left: playerPos.x, top: playerPos.y }}>
-              🏃
-              {capacityWarning && <div className="capacity-warning">Kapasite Dolu!</div>}
+          {/* MOBİL KONTROLLER */}
+          <div className="mobile-controls">
+            <div className="d-pad">
+              <button 
+                className="btn-dir up" 
+                onPointerDown={() => handleControlStart('w')} onPointerUp={() => handleControlEnd('w')}
+                onTouchStart={() => handleControlStart('w')} onTouchEnd={() => handleControlEnd('w')}
+              >▲</button>
+              <div className="d-pad-middle">
+                <button 
+                  className="btn-dir left" 
+                  onPointerDown={() => handleControlStart('a')} onPointerUp={() => handleControlEnd('a')}
+                  onTouchStart={() => handleControlStart('a')} onTouchEnd={() => handleControlEnd('a')}
+                >◀</button>
+                <div className="d-pad-center"></div>
+                <button 
+                  className="btn-dir right" 
+                  onPointerDown={() => handleControlStart('d')} onPointerUp={() => handleControlEnd('d')}
+                  onTouchStart={() => handleControlStart('d')} onTouchEnd={() => handleControlEnd('d')}
+                >▶</button>
+              </div>
+              <button 
+                className="btn-dir down" 
+                onPointerDown={() => handleControlStart('s')} onPointerUp={() => handleControlEnd('s')}
+                onTouchStart={() => handleControlStart('s')} onTouchEnd={() => handleControlEnd('s')}
+              >▼</button>
+            </div>
+            
+            <div className="action-pad">
+              <button 
+                className="btn-action e-btn"
+                onPointerDown={() => handleControlStart('e')} onPointerUp={() => handleControlEnd('e')}
+                onTouchStart={() => handleControlStart('e')} onTouchEnd={() => handleControlEnd('e')}
+              >E</button>
             </div>
           </div>
         </>
       )}
 
-      {/* PHASE 2: SURVIVAL */}
       {gameState === 'survival' && (
         <div className="survival-screen">
-          
-          {/* Rastgele Event Modalı */}
           {eventModal && (
             <div className="event-modal">
               <div className="event-box">
@@ -448,7 +491,6 @@ function App() {
           </div>
 
           <div className="survival-content">
-            {/* KAYNAKLAR BÖLÜMÜ */}
             <div className="supplies-panel">
               <h2>Erzaklar</h2>
               <div className="supplies-grid">
@@ -461,7 +503,6 @@ function App() {
               </div>
             </div>
 
-            {/* İNSANLAR BÖLÜMÜ */}
             <div className="survivors-panel">
               <h2>Sığınaktakiler</h2>
               <div className="survivors-list">
@@ -472,8 +513,8 @@ function App() {
                       <div className="survivor-name">{s.name} {s.status === 'expedition' && '(Keşifte)'}</div>
                       {s.isAlive && s.status !== 'expedition' && (
                         <div className="survivor-status">
-                          {s.needsFood && <span className="stat warn">Aç ({s.daysHungry}/4)</span>}
-                          {s.needsWater && <span className="stat danger">Susuz ({s.daysThirsty}/2)</span>}
+                          {s.needsFood && <span className="stat warn">Aç ({s.daysHungry}/5)</span>}
+                          {s.needsWater && <span className="stat danger">Susuz ({s.daysThirsty}/3)</span>}
                           {s.isSick && <span className="stat sick">Hasta ({s.daysSick}/6)</span>}
                           {!s.needsFood && !s.needsWater && !s.isSick && <span className="stat ok">Sağlıklı</span>}
                         </div>
@@ -493,7 +534,6 @@ function App() {
               </div>
             </div>
 
-            {/* GÜNLÜK BÖLÜMÜ */}
             <div className="log-panel">
               <h2>Günlük</h2>
               <div className="log-list">
@@ -502,12 +542,10 @@ function App() {
                 ))}
               </div>
             </div>
-
           </div>
         </div>
       )}
 
-      {/* GAMEOVER */}
       {gameState === 'gameover' && (
         <div className="overlay-screen">
           <div className="nuclear-flash"></div>
