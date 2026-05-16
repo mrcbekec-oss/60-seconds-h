@@ -64,10 +64,13 @@ function App() {
   /* =========================================================
      MULTIPLAYER BAĞLANTI (PEERJS)
      ========================================================= */
+  const generateShortId = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+
   const hostRoom = () => {
     setIsMultiplayer(true);
     setIsHost(true);
-    const peer = new Peer();
+    const customId = 'ODA-' + generateShortId();
+    const peer = new Peer(customId);
     peer.on('open', (id) => setPeerId(id));
     peer.on('connection', (connection) => {
       setConn(connection);
